@@ -115,6 +115,12 @@ def prepare(event_name, event, ref, bump, run_id):
                 or release.get("prerelease") or not tag.startswith("v")
                 or not VERSION.fullmatch(tag[1:]) or ref != "refs/tags/" + tag):
             raise ValueError("expected a published stable version tag")
+    elif event_name == "push":
+        if ref != "refs/heads/" + branch:
+            raise ValueError("push releases must originate on the default branch")
+        if not re.fullmatch(r"[0-9]+", run_id):
+            raise ValueError("invalid GitHub run id")
+        bump_version("0.0.0", bump)  # Validate before changing the checkout.
     else:
         raise ValueError("unsupported release event")
 
