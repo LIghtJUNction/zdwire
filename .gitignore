@@ -1,0 +1,4 @@
+/target/
+/comparison/target/
+/fuzz/target/
+*.profraw
