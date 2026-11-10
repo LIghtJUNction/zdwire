@@ -1,0 +1,26 @@
+Measurement date: 2026-11-10 (Asia/Taipei)
+CPU: INTEL(R) XEON(R) PLATINUM 8573C
+Kernel and architecture: 6.18.57 x86_64
+Environment: shared Linux container
+Primary run: taskset -c 8; results/pinned.csv
+Secondary run: no core pinning; results/local.csv
+Available CPU affinity: 0,1,2,3,4,5,6,7,8
+Rust flags: none; generic host target
+Cargo profile: release; thin LTO; codegen-units=1
+domain: 0.12.3; default-features=false; exact comparison/Cargo.lock
+octseq: 0.6.1; default-features=false; alloc enabled for test snapshots
+Samples: 11; alternating implementation order; median nanoseconds/message
+Target sample duration: 50 ms per implementation
+Input generation and full equivalence checks: outside timed region
+Timed heap allocations: none in either implementation
+Compression table: 24 entries per implementation
+Unpinned command: ZD_BENCH_MS=50 ZD_BENCH_SAMPLES=11 cargo run --release --manifest-path comparison/Cargo.toml --locked --bin compare
+Pinned command: taskset -c 8 env ZD_BENCH_MS=50 ZD_BENCH_SAMPLES=11 comparison/target/release/compare
+
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+binary: rustc
+commit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67
+commit-date: 2026-10-13
+host: x86_64-unknown-linux-gnu
+release: 1.99.1
+LLVM version: 23.1.1

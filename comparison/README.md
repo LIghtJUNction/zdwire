@@ -9,7 +9,7 @@ cargo run --release --manifest-path comparison/Cargo.toml --locked --bin compare
 ```
 
 The program checks full semantic equality before measuring any fixture. It then
-prints CSV rows for raw-record traversal, typed-RDATA traversal, malformed-name
+prints CSV rows for raw-record traversal, specialized and generic typed-RDATA traversal, malformed-name
 rejection, uncompressed serialization, and compressed serialization. Ratios are
 `domain_ns / zdwire_ns`; values above one favor `zdwire`.
 
