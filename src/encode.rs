@@ -6,10 +6,10 @@ use crate::{Class, Error, ErrorKind, Header, Name, Section, Type};
 ///
 /// Slots are direct-mapped: collisions may reduce compression, never correctness.
 /// The encoder only indexes uncompressed names, so generated pointers have a
-/// single hop. A table of 256 slots occupies 4 KiB on common targets.
+/// single hop. A table of 256 slots occupies 2 KiB on common targets.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CompressionEntry {
-    hash: u64,
+    hash: u32,
     offset: u16,
     len: u8,
 }
@@ -82,7 +82,7 @@ pub enum RecordData<'a> {
     Caa {
         /// Property flags.
         flags: u8,
-        /// One to fifteen ASCII letters or digits.
+        /// One to 255 ASCII letters or digits.
         tag: &'a [u8],
         /// Opaque property value.
         value: &'a [u8],
@@ -132,6 +132,7 @@ pub struct MessageBuilder<'a> {
     counts: [u16; 4],
     section: u8,
     opt_written: bool,
+    last: CompressionEntry,
 }
 
 impl<'a> MessageBuilder<'a> {
@@ -139,6 +140,7 @@ impl<'a> MessageBuilder<'a> {
     ///
     /// Only the supplied header's ID and flags are used. Section counts start
     /// at zero and are updated automatically.
+    #[inline(always)]
     pub fn new(buffer: &'a mut [u8], header: Header) -> Result<Self, Error> {
         Self::with_compression(buffer, header, &mut [])
     }
@@ -148,6 +150,7 @@ impl<'a> MessageBuilder<'a> {
     /// The table is cleared on success. An empty table disables compression.
     /// Exact label bytes, including letter case, are preserved. Dictionary
     /// collisions affect only the encoded size; lookup work stays bounded.
+    #[inline(always)]
     pub fn with_compression(
         buffer: &'a mut [u8],
         header: Header,
@@ -170,6 +173,7 @@ impl<'a> MessageBuilder<'a> {
             counts: [0; 4],
             section: 0,
             opt_written: false,
+            last: CompressionEntry::EMPTY,
         })
     }
 
@@ -194,6 +198,7 @@ impl<'a> MessageBuilder<'a> {
     }
 
     /// Appends a question, updating QDCOUNT.
+    #[inline(always)]
     pub fn add_question(
         &mut self,
         name: Name<'_>,
@@ -202,8 +207,8 @@ impl<'a> MessageBuilder<'a> {
     ) -> Result<(), Error> {
         self.check_section(0)?;
         let plan = self.plan_name(name, self.len, &[], true)?;
-        let fields = self.len + plan.encoded_len();
-        let end = fields + 4;
+        let fields = checked_add(self.len, plan.encoded_len(), self.len)?;
+        let end = checked_add(fields, 4, fields)?;
         self.reserve(end)?;
         self.write_name(&plan);
         self.put_u16(fields, qtype.0);
@@ -214,7 +219,108 @@ impl<'a> MessageBuilder<'a> {
     }
 
     /// Appends a typed resource record in the selected section.
+    #[inline(always)]
     pub fn add_record(
+        &mut self,
+        section: Section,
+        owner: Name<'_>,
+        class: Class,
+        ttl: u32,
+        data: RecordData<'_>,
+    ) -> Result<(), Error> {
+        match data {
+            RecordData::A(address) => {
+                self.add_bytes_record(section, owner, class, ttl, (Type::A, &address))
+            }
+            RecordData::Aaaa(address) => {
+                self.add_bytes_record(section, owner, class, ttl, (Type::AAAA, &address))
+            }
+            RecordData::Txt(wire) => {
+                self.add_bytes_record(section, owner, class, ttl, (Type::TXT, wire))
+            }
+            RecordData::Unknown { rr_type, rdata } if !known_type(rr_type) => {
+                self.add_bytes_record(section, owner, class, ttl, (rr_type, rdata))
+            }
+            _ => self.add_structured_record(section, owner, class, ttl, data),
+        }
+    }
+
+    #[inline(always)]
+    fn add_bytes_record(
+        &mut self,
+        section: Section,
+        name: Name<'_>,
+        class: Class,
+        ttl: u32,
+        data: (Type, &[u8]),
+    ) -> Result<(), Error> {
+        let section = section_index(section);
+        self.check_section(section)?;
+        if let Some(wire) = name.as_uncompressed() {
+            if self.table.is_empty() {
+                return self.append_record_bytes(section, wire, class, ttl, data);
+            }
+            let last = self.last.offset as usize;
+            if self.last.len as usize == wire.len() && self.buffer[last..last + wire.len()] == *wire
+            {
+                let pointer = (self.last.offset | 0xc000).to_be_bytes();
+                return self.append_record_bytes(section, &pointer, class, ttl, data);
+            }
+        }
+        let (rr_type, data) = data;
+        let owner = self.plan_name(name, self.len, &[], true)?;
+        let fields = checked_add(self.len, owner.encoded_len(), self.len)?;
+        let start = checked_add(fields, 10, fields)?;
+        if data.len() > u16::MAX as usize {
+            return Err(Error::new(ErrorKind::InvalidRdata, fields + 8));
+        }
+        let end = checked_add(start, data.len(), start)?;
+        if rr_type == Type::TXT {
+            validate_txt(data, start)?;
+        }
+        self.reserve(end)?;
+        self.write_name(&owner);
+        self.put_u16(fields, rr_type.0);
+        self.put_u16(fields + 2, class.0);
+        self.put_u32(fields + 4, ttl);
+        self.put_u16(fields + 8, data.len() as u16);
+        self.buffer[start..end].copy_from_slice(data);
+        self.register_name(&owner);
+        self.complete(section, end);
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn append_record_bytes(
+        &mut self,
+        section: u8,
+        owner: &[u8],
+        class: Class,
+        ttl: u32,
+        data: (Type, &[u8]),
+    ) -> Result<(), Error> {
+        let (rr_type, data) = data;
+        let fields = checked_add(self.len, owner.len(), self.len)?;
+        let start = checked_add(fields, 10, fields)?;
+        if data.len() > u16::MAX as usize {
+            return Err(Error::new(ErrorKind::InvalidRdata, fields + 8));
+        }
+        let end = checked_add(start, data.len(), start)?;
+        if rr_type == Type::TXT {
+            validate_txt(data, start)?;
+        }
+        self.reserve(end)?;
+        self.buffer[self.len..fields].copy_from_slice(owner);
+        self.put_u16(fields, rr_type.0);
+        self.put_u16(fields + 2, class.0);
+        self.put_u32(fields + 4, ttl);
+        self.put_u16(fields + 8, data.len() as u16);
+        self.buffer[start..end].copy_from_slice(data);
+        self.complete(section, end);
+        Ok(())
+    }
+
+    fn add_structured_record(
         &mut self,
         section: Section,
         owner: Name<'_>,
@@ -225,8 +331,8 @@ impl<'a> MessageBuilder<'a> {
         let section = section_index(section);
         self.check_section(section)?;
         let owner = self.plan_name(owner, self.len, &[], true)?;
-        let fields = self.len + owner.encoded_len();
-        let start = fields + 10;
+        let fields = checked_add(self.len, owner.encoded_len(), self.len)?;
+        let start = checked_add(fields, 10, fields)?;
         let mut first = NamePlan::EMPTY;
         let mut second = NamePlan::EMPTY;
         let rdlen = match data {
@@ -237,31 +343,42 @@ impl<'a> MessageBuilder<'a> {
                 first.encoded_len()
             }
             RecordData::Mx { exchange, .. } => {
-                first = self.plan_name(exchange, start + 2, &[&owner], true)?;
+                first = self.plan_name(exchange, checked_add(start, 2, start)?, &[&owner], true)?;
                 2 + first.encoded_len()
             }
             RecordData::Txt(wire) => {
+                if wire.len() > u16::MAX as usize {
+                    return Err(Error::new(ErrorKind::InvalidRdata, fields + 8));
+                }
+                checked_add(start, wire.len(), start)?;
                 validate_txt(wire, start)?;
                 wire.len()
             }
             RecordData::Soa { mname, rname, .. } => {
                 first = self.plan_name(mname, start, &[&owner], true)?;
-                second =
-                    self.plan_name(rname, start + first.encoded_len(), &[&owner, &first], true)?;
+                second = self.plan_name(
+                    rname,
+                    checked_add(start, first.encoded_len(), start)?,
+                    &[&owner, &first],
+                    true,
+                )?;
                 first.encoded_len() + second.encoded_len() + 20
             }
             RecordData::Srv { target, .. } => {
-                first = self.plan_name(target, start + 6, &[&owner], false)?;
+                first = self.plan_name(target, checked_add(start, 6, start)?, &[&owner], false)?;
                 6 + first.encoded_len()
             }
             RecordData::Caa { tag, value, .. } => {
-                if tag.is_empty() || tag.len() > 15 {
+                let tag_start = checked_add(start, 2, start)?;
+                if tag.is_empty() || tag.len() > 255 {
                     return Err(Error::new(ErrorKind::InvalidRdata, start + 1));
                 }
+                let len = checked_add(2 + tag.len(), value.len(), start)?;
+                checked_add(start, len, start)?;
                 if let Some(index) = tag.iter().position(|b| !b.is_ascii_alphanumeric()) {
-                    return Err(Error::new(ErrorKind::InvalidRdata, start + 2 + index));
+                    return Err(Error::new(ErrorKind::InvalidRdata, tag_start + index));
                 }
-                checked_add(2 + tag.len(), value.len(), start)?
+                len
             }
             RecordData::Unknown { rr_type, rdata } => {
                 if known_type(rr_type) {
@@ -341,6 +458,7 @@ impl<'a> MessageBuilder<'a> {
     /// `options_wire` is a sequence of `(code: u16, length: u16, value)` in
     /// network byte order. Unknown option codes and EDNS versions are retained.
     /// Set bit `0x8000` in `flags` for the DNSSEC OK bit.
+    #[inline]
     pub fn add_opt(
         &mut self,
         udp_size: u16,
@@ -353,12 +471,12 @@ impl<'a> MessageBuilder<'a> {
         if self.opt_written {
             return Err(Error::new(ErrorKind::DuplicateOpt, self.len));
         }
-        let start = self.len + 11;
+        let start = checked_add(self.len, 11, self.len)?;
         if options_wire.len() > u16::MAX as usize {
             return Err(Error::new(ErrorKind::InvalidOpt, self.len + 9));
         }
-        validate_options(options_wire, start)?;
         let end = checked_add(start, options_wire.len(), start)?;
+        validate_options(options_wire, start)?;
         self.reserve(end)?;
         self.buffer[self.len] = 0;
         self.put_u16(self.len + 1, Type::OPT.0);
@@ -372,6 +490,7 @@ impl<'a> MessageBuilder<'a> {
         Ok(())
     }
 
+    #[inline]
     fn check_section(&self, section: u8) -> Result<(), Error> {
         if section < self.section {
             return Err(Error::new(ErrorKind::InvalidSection, self.len));
@@ -385,6 +504,7 @@ impl<'a> MessageBuilder<'a> {
         Ok(())
     }
 
+    #[inline]
     fn complete(&mut self, section: u8, end: usize) {
         self.counts[section as usize] += 1;
         self.put_u16(4 + section as usize * 2, self.counts[section as usize]);
@@ -392,6 +512,7 @@ impl<'a> MessageBuilder<'a> {
         self.len = end;
     }
 
+    #[inline]
     fn reserve(&self, end: usize) -> Result<(), Error> {
         if end > u16::MAX as usize {
             return Err(Error::new(ErrorKind::MessageTooLong, self.len));
@@ -405,105 +526,165 @@ impl<'a> MessageBuilder<'a> {
         Ok(())
     }
 
+    #[inline]
     fn put_u16(&mut self, offset: usize, value: u16) {
         self.buffer[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
     }
 
+    #[inline]
     fn put_u32(&mut self, offset: usize, value: u32) {
         self.buffer[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
     }
 
-    fn plan_name(
+    #[inline]
+    fn plan_name<'n>(
         &self,
-        name: Name<'_>,
+        name: Name<'n>,
         offset: usize,
-        earlier: &[&NamePlan],
+        earlier: &[&NamePlan<'_>],
         allow_compression: bool,
-    ) -> Result<NamePlan, Error> {
-        let mut plan = NamePlan::EMPTY;
-        plan.len = name.write_uncompressed(&mut plan.wire)?;
-        plan.prefix = plan.len;
-        plan.offset = offset;
-        if allow_compression && !self.table.is_empty() {
-            let mut start = 0;
-            while plan.wire[start] != 0 {
-                let suffix = &plan.wire[start..plan.len];
-                // A pointer never enlarges a name: root-only suffixes are skipped.
-                if suffix.len() > 2 {
-                    let hash = suffix_hash(suffix);
-                    let entry = self.table[hash as usize % self.table.len()];
-                    let candidate = entry.offset as usize;
-                    if entry.len as usize == suffix.len()
-                        && entry.hash == hash
-                        && candidate + suffix.len() <= self.len
-                        && self.buffer[candidate..candidate + suffix.len()] == *suffix
-                    {
-                        plan.prefix = start;
-                        plan.pointer = Some(entry.offset);
-                        return Ok(plan);
-                    }
-                    for previous in earlier {
-                        if let Some(target) = previous.find_suffix(suffix) {
-                            plan.prefix = start;
-                            plan.pointer = Some(target);
-                            return Ok(plan);
-                        }
-                    }
-                }
-                start += plan.wire[start] as usize + 1;
-            }
+    ) -> Result<NamePlan<'n>, Error> {
+        let mut plan = NamePlan {
+            name: Some(name),
+            len: name.wire_len(),
+            prefix: name.wire_len(),
+            pointer: None,
+            offset,
+        };
+        if !allow_compression || self.table.is_empty() || (self.last.len == 0 && earlier.is_empty())
+        {
+            return Ok(plan);
+        }
+        if let Some(wire) = name.as_uncompressed() {
+            self.compress_name(&mut plan, wire, earlier);
+        } else {
+            let mut wire = [0; 255];
+            let len = name.write_uncompressed(&mut wire)?;
+            self.compress_name(&mut plan, &wire[..len], earlier);
         }
         Ok(plan)
     }
 
-    fn write_name(&mut self, plan: &NamePlan) {
-        let tail = plan.offset + plan.prefix;
-        self.buffer[plan.offset..tail].copy_from_slice(&plan.wire[..plan.prefix]);
-        if let Some(pointer) = plan.pointer {
-            self.put_u16(tail, pointer | 0xc000);
-        }
-    }
-
-    fn register_name(&mut self, plan: &NamePlan) {
-        if self.table.is_empty() || plan.len == 0 || plan.pointer.is_some() {
+    fn compress_name(&self, plan: &mut NamePlan<'_>, wire: &[u8], earlier: &[&NamePlan<'_>]) {
+        let last = self.last.offset as usize;
+        if self.last.len as usize == wire.len() && self.buffer[last..last + wire.len()] == *wire {
+            plan.prefix = 0;
+            plan.pointer = Some(self.last.offset);
             return;
         }
         let mut start = 0;
-        while plan.wire[start] != 0 {
-            let offset = plan.offset + start;
+        while wire[start] != 0 {
+            let suffix = &wire[start..];
+            let hash = suffix_hash(suffix);
+            let entry = self.table[hash as usize % self.table.len()];
+            let candidate = entry.offset as usize;
+            if entry.len as usize == suffix.len()
+                && entry.hash == hash
+                && candidate + suffix.len() <= self.len
+                && self.buffer[candidate..candidate + suffix.len()] == *suffix
+            {
+                plan.prefix = start;
+                plan.pointer = Some(entry.offset);
+                return;
+            }
+            for previous in earlier {
+                if let Some(target) = previous.find_suffix(suffix) {
+                    plan.prefix = start;
+                    plan.pointer = Some(target);
+                    return;
+                }
+            }
+            start += wire[start] as usize + 1;
+        }
+    }
+
+    #[inline]
+    fn write_name(&mut self, plan: &NamePlan<'_>) {
+        if let Some(name) = plan.name {
+            let tail = plan.offset + plan.prefix;
+            if let Some(pointer) = plan.pointer {
+                if let Some(wire) = name.as_uncompressed() {
+                    self.buffer[plan.offset..tail].copy_from_slice(&wire[..plan.prefix]);
+                } else {
+                    let mut pos = plan.offset;
+                    for label in name.labels() {
+                        if pos == tail {
+                            break;
+                        }
+                        self.buffer[pos] = label.len() as u8;
+                        pos += 1;
+                        self.buffer[pos..pos + label.len()].copy_from_slice(label);
+                        pos += label.len();
+                    }
+                }
+                self.put_u16(tail, pointer | 0xc000);
+            } else {
+                // The complete append was reserved before any write. The slice
+                // is exactly the name's validated length, so this cannot fail.
+                let _ = name.write_uncompressed(&mut self.buffer[plan.offset..tail]);
+            }
+        }
+    }
+
+    #[inline]
+    fn register_name(&mut self, plan: &NamePlan<'_>) {
+        if self.table.is_empty() || plan.len == 0 || plan.pointer.is_some() {
+            return;
+        }
+        if let Some(name) = plan.name {
+            if let Some(wire) = name.as_uncompressed() {
+                self.register_wire(plan.offset, wire);
+            } else {
+                let mut wire = [0; 255];
+                // This fixed array accommodates every validated DNS name.
+                let _ = name.write_uncompressed(&mut wire);
+                self.register_wire(plan.offset, &wire[..plan.len]);
+            }
+        }
+    }
+
+    fn register_wire(&mut self, offset: usize, wire: &[u8]) {
+        let mut start = 0;
+        while wire[start] != 0 {
+            let offset = offset + start;
             if offset >= 0x4000 {
                 break;
             }
-            let suffix = &plan.wire[start..plan.len];
+            let suffix = &wire[start..];
             let hash = suffix_hash(suffix);
             let slot = hash as usize % self.table.len();
-            self.table[slot] = CompressionEntry {
+            let entry = CompressionEntry {
                 hash,
                 offset: offset as u16,
                 len: suffix.len() as u8,
             };
-            start += plan.wire[start] as usize + 1;
+            self.table[slot] = entry;
+            if start == 0 {
+                self.last = entry;
+            }
+            start += wire[start] as usize + 1;
         }
     }
 }
 
-struct NamePlan {
-    wire: [u8; 255],
+struct NamePlan<'a> {
+    name: Option<Name<'a>>,
     len: usize,
     prefix: usize,
     pointer: Option<u16>,
     offset: usize,
 }
 
-impl NamePlan {
+impl NamePlan<'_> {
     const EMPTY: Self = Self {
-        wire: [0; 255],
+        name: None,
         len: 0,
         prefix: 0,
         pointer: None,
         offset: 0,
     };
 
+    #[inline]
     fn encoded_len(&self) -> usize {
         self.prefix + if self.pointer.is_some() { 2 } else { 0 }
     }
@@ -512,19 +693,31 @@ impl NamePlan {
         if self.pointer.is_some() || self.len < suffix.len() {
             return None;
         }
+        let name = self.name?;
+        if let Some(wire) = name.as_uncompressed() {
+            self.find_wire_suffix(wire, suffix)
+        } else {
+            let mut wire = [0; 255];
+            let _ = name.write_uncompressed(&mut wire);
+            self.find_wire_suffix(&wire[..self.len], suffix)
+        }
+    }
+
+    fn find_wire_suffix(&self, wire: &[u8], suffix: &[u8]) -> Option<u16> {
         let target = self.len - suffix.len();
-        let absolute = self.offset + target;
-        if absolute >= 0x4000 || self.wire[target..self.len] != *suffix {
+        let absolute = self.offset.checked_add(target)?;
+        if absolute >= 0x4000 || wire[target..] != *suffix {
             return None;
         }
         let mut start = 0;
         while start < target {
-            start += self.wire[start] as usize + 1;
+            start += wire[start] as usize + 1;
         }
         (start == target).then_some(absolute as u16)
     }
 }
 
+#[inline]
 fn section_index(section: Section) -> u8 {
     match section {
         Section::Answer => 1,
@@ -537,16 +730,17 @@ fn known_type(rr_type: Type) -> bool {
     matches!(rr_type.0, 1 | 2 | 5 | 6 | 12 | 15 | 16 | 28 | 33 | 41 | 257)
 }
 
+#[inline]
 fn checked_add(a: usize, b: usize, offset: usize) -> Result<usize, Error> {
     a.checked_add(b)
         .ok_or_else(|| Error::new(ErrorKind::LengthOverflow, offset))
 }
 
-fn suffix_hash(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+fn suffix_hash(bytes: &[u8]) -> u32 {
+    let mut hash = 0x811c_9dc5u32;
     for byte in bytes {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100_0000_01b3);
+        hash ^= *byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
     }
     hash
 }
@@ -573,11 +767,10 @@ fn validate_options(wire: &[u8], offset: usize) -> Result<(), Error> {
             return Err(Error::new(ErrorKind::InvalidOpt, offset + pos));
         }
         let len = u16::from_be_bytes([wire[pos + 2], wire[pos + 3]]) as usize;
-        let end = checked_add(pos, 4 + len, offset)?;
-        if end > wire.len() {
+        if len > wire.len() - pos - 4 {
             return Err(Error::new(ErrorKind::InvalidOpt, offset + pos + 2));
         }
-        pos = end;
+        pos += 4 + len;
     }
     Ok(())
 }

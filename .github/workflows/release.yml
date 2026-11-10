@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version increment (current publishes or resumes the existing version)
+        required: true
+        default: patch
+        type: choice
+        options: [patch, minor, major, current]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zdwire-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name == 'release' && !github.event.release.draft && !github.event.release.prerelease)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.prepare.outputs.sha }}
+      version: ${{ steps.prepare.outputs.version }}
+      tag: ${{ steps.prepare.outputs.tag }}
+    steps:
+      # Run trust checks from the default branch before checking out any release tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - name: Check publishing credential is configured
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo 'Configure the CARGO_REGISTRY_TOKEN repository secret before releasing.' >&2
+            exit 1
+          fi
+      - name: Verify event and prepare version commit
+        id: prepare
+        env:
+          INPUT_BUMP: ${{ inputs.bump || 'current' }}
+        run: python3 scripts/release.py prepare
+
+  verify:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+    permissions:
+      contents: read
+
+  publish:
+    needs: [prepare, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+      - run: rustup toolchain install stable --profile minimal
+      - name: Publish tested commit, version tag, and GitHub release
+        env:
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RUSTUP_TOOLCHAIN: stable
+        run: python3 scripts/release.py publish --sha "$RELEASE_SHA"
+      # Publishing stays in this run: GITHUB_TOKEN-created tags/releases need
+      # not start another workflow for crates.io publication to complete.

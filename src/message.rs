@@ -199,7 +199,12 @@ impl<'a> MessageView<'a> {
             data: self.data,
             pos: Header::LEN,
             remaining: self.header.questions,
-            failed: false,
+            counts: [
+                self.header.answers,
+                self.header.authorities,
+                self.header.additionals,
+            ],
+            error: None,
         }
     }
 
@@ -302,23 +307,44 @@ pub struct Questions<'a> {
     data: &'a [u8],
     pos: usize,
     remaining: u16,
-    failed: bool,
+    counts: [u16; 3],
+    error: Option<Error>,
+}
+impl<'a> Questions<'a> {
+    /// Continues into all resource-record sections without reparsing consumed
+    /// questions. Any unconsumed questions are validated and skipped once.
+    /// An earlier question error is returned again, preserving its offset.
+    pub fn into_records(self) -> Result<Records<'a>, Error> {
+        if let Some(error) = self.error {
+            return Err(error);
+        }
+        let mut records = Records {
+            data: self.data,
+            pos: self.pos,
+            questions: self.remaining,
+            counts: self.counts,
+            section: 0,
+            failed: false,
+        };
+        records.skip_questions()?;
+        Ok(records)
+    }
 }
 impl<'a> Iterator for Questions<'a> {
     type Item = Result<Question<'a>, Error>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.failed || self.remaining == 0 {
+        if self.error.is_some() || self.remaining == 0 {
             return None;
         }
         self.remaining -= 1;
         let result = parse_question(self.data, &mut self.pos);
-        self.failed = result.is_err();
+        self.error = result.as_ref().err().copied();
         Some(result)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         (
             0,
-            Some(if self.failed {
+            Some(if self.error.is_some() {
                 0
             } else {
                 self.remaining as usize
@@ -348,6 +374,7 @@ pub struct Record<'a> {
 }
 impl<'a> Record<'a> {
     /// Validates and interprets supported RDATA. Unknown types stay opaque.
+    #[inline]
     pub fn data(self) -> Result<Rdata<'a>, Error> {
         Rdata::parse(self)
     }

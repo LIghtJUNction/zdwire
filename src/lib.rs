@@ -1,6 +1,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![doc = include_str!("../README.md")]
 //! Allocation-free DNS wire parsing and encoding using caller-owned buffers.
 //!
 //! [`MessageView::parse`] reads the header only. Iterators validate the fields

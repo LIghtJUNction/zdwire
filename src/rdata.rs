@@ -198,6 +198,9 @@ pub struct Txt<'a> {
 impl<'a> Txt<'a> {
     /// Validates standalone length-prefixed character strings.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
+        if data.len() > u16::MAX as usize {
+            return Err(Error::new(ErrorKind::InvalidRdata, u16::MAX as usize));
+        }
         Self::parse_at(data, 0)
     }
     fn parse_at(data: &'a [u8], base: usize) -> Result<Self, Error> {
@@ -304,6 +307,9 @@ pub struct OptOptions<'a> {
 impl<'a> OptOptions<'a> {
     /// Validates standalone EDNS option wire bytes.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
+        if data.len() > u16::MAX as usize {
+            return Err(Error::new(ErrorKind::InvalidOpt, u16::MAX as usize));
+        }
         validate_options(data, 0)?;
         Ok(Self { remaining: data })
     }

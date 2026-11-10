@@ -1,0 +1,21 @@
+[package]
+name = "zdwire-comparison"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.87"
+publish = false
+
+[workspace]
+
+[dependencies]
+zdwire = { path = ".." }
+domain = { version = "=0.12.3", default-features = false }
+octseq = { version = "=0.6.1", default-features = false, features = ["alloc"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[[bin]]
+name = "compare"
+path = "src/main.rs"

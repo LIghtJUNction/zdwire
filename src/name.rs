@@ -63,7 +63,7 @@ impl<'a> Name<'a> {
                         start: start as u16,
                         end: (pos + 1) as u16,
                         labels_start: start as u16,
-                        expanded_len: expanded as u16,
+                        expanded_len: expanded as u16 | 0x8000,
                     },
                     pos + 1,
                 ));
@@ -102,6 +102,7 @@ impl<'a> Name<'a> {
         let mut seen = [0u16; MAX_POINTER_HOPS];
         let mut hops = 0;
         let mut first = if start == pos { None } else { Some(start) };
+        let mut contiguous = start == pos;
         loop {
             // Every pointer is checked before following it. Literal runs are
             // bounded by the input length and the expanded-name length.
@@ -110,6 +111,9 @@ impl<'a> Name<'a> {
                 .ok_or(Error::new(ErrorKind::UnexpectedEnd, message.len()))?
                 as usize;
             if len >= 0xc0 {
+                if first.is_some() {
+                    contiguous = false;
+                }
                 let low = *message
                     .get(pos + 1)
                     .ok_or(Error::new(ErrorKind::UnexpectedEnd, message.len()))?
@@ -140,7 +144,7 @@ impl<'a> Name<'a> {
                         start: start as u16,
                         end: end as u16,
                         labels_start: first as u16,
-                        expanded_len: expanded as u16,
+                        expanded_len: expanded as u16 | if contiguous { 0x8000 } else { 0 },
                     },
                     end,
                 ));
@@ -176,7 +180,7 @@ impl<'a> Name<'a> {
 
     /// Length of the uncompressed wire representation, including the root.
     pub const fn wire_len(self) -> usize {
-        self.expanded_len as usize
+        (self.expanded_len & 0x01ff) as usize
     }
 
     /// Length occupied in the original packet, including a terminating pointer.
@@ -191,11 +195,24 @@ impl<'a> Name<'a> {
 
     /// Whether this is the root name.
     pub const fn is_root(self) -> bool {
-        self.expanded_len == 1
+        self.wire_len() == 1
+    }
+
+    /// Returns a contiguous uncompressed representation when one is available.
+    /// Pure pointer chains ending in a plain name can borrow that final target;
+    /// names combining literal labels and compressed suffixes return `None`.
+    #[inline]
+    pub fn as_uncompressed(self) -> Option<&'a [u8]> {
+        if self.expanded_len & 0x8000 == 0 {
+            return None;
+        }
+        let start = self.labels_start as usize;
+        Some(&self.message[start..start + self.wire_len()])
     }
 
     /// Writes the expanded wire representation. On insufficient capacity, leaves
     /// the output untouched and returns the exact required length.
+    #[inline]
     pub fn write_uncompressed(self, output: &mut [u8]) -> Result<usize, Error> {
         let needed = self.wire_len();
         if output.len() < needed {
@@ -203,6 +220,10 @@ impl<'a> Name<'a> {
                 ErrorKind::BufferTooSmall { needed },
                 output.len(),
             ));
+        }
+        if let Some(wire) = self.as_uncompressed() {
+            output[..needed].copy_from_slice(wire);
+            return Ok(needed);
         }
         let mut pos = 0;
         for label in self.labels() {

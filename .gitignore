@@ -2,3 +2,4 @@
 /comparison/target/
 /fuzz/target/
 *.profraw
+__pycache__/

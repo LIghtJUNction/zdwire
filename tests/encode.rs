@@ -234,6 +234,7 @@ fn failed_record_keeps_section_counts_dictionary_and_content() {
 fn validation_errors_are_transactional() {
     let mut output = [0; 512];
     let mut encoder = MessageBuilder::new(&mut output, Header::new(0, 0)).unwrap();
+    let oversized_tag = [b'a'; 256];
     let invalid = [
         RecordData::Txt(b""),
         RecordData::Txt(b"\x02a"),
@@ -249,7 +250,7 @@ fn validation_errors_are_transactional() {
         },
         RecordData::Caa {
             flags: 0,
-            tag: b"0123456789012345",
+            tag: &oversized_tag,
             value: b"",
         },
         RecordData::Unknown {
@@ -412,4 +413,71 @@ fn header_counts_are_owned_by_builder() {
     let mut output = [0; 12];
     let encoder = MessageBuilder::new(&mut output, header).unwrap();
     assert_eq!(&encoder.as_bytes()[4..], &[0; 8]);
+}
+
+#[test]
+fn parsed_compressed_names_reencode_without_source_pointer_relocation() {
+    let source = b"\x07example\x03com\0\x03www\xc0\x00\x04mail\xc0\x00";
+    let (www, next) = Name::parse(source, EXAMPLE.len()).unwrap();
+    let (mail, _) = Name::parse(source, next).unwrap();
+    for compressed in [false, true] {
+        let mut output = [0; 256];
+        let mut table = [CompressionEntry::EMPTY; 256];
+        let mut encoder = if compressed {
+            MessageBuilder::with_compression(&mut output, Header::new(0, 0), &mut table).unwrap()
+        } else {
+            MessageBuilder::new(&mut output, Header::new(0, 0)).unwrap()
+        };
+        encoder.add_question(www, Type::A, Class::IN).unwrap();
+        encoder.add_question(mail, Type::A, Class::IN).unwrap();
+        encoder.add_question(www, Type::A, Class::IN).unwrap();
+        let wire = encoder.finish();
+        let mut offset = 12;
+        for original in [www, mail, www] {
+            let (actual, end) = Name::parse(wire, offset).unwrap();
+            assert!(actual.eq_case_sensitive(original));
+            offset = end + 4;
+        }
+        assert_eq!(offset, wire.len());
+        MessageView::parse(wire).unwrap().validate().unwrap();
+    }
+}
+
+#[test]
+fn caa_tag_uses_the_entire_nonzero_single_octet_length_range() {
+    for size in [1, 15, 16, 254, 255] {
+        let mut output = [0; 512];
+        let tag = vec![b'x'; size];
+        let mut encoder = MessageBuilder::new(&mut output, Header::new(0, 0)).unwrap();
+        encoder
+            .add_record(
+                Section::Answer,
+                name(&[0]),
+                Class::IN,
+                0,
+                RecordData::Caa {
+                    flags: 0,
+                    tag: &tag,
+                    value: &[],
+                },
+            )
+            .unwrap();
+        let wire = encoder.finish();
+        assert_eq!(wire[24] as usize, size);
+        MessageView::parse(wire).unwrap().validate().unwrap();
+    }
+}
+
+#[test]
+fn oversized_opt_length_cannot_overflow_on_narrow_targets() {
+    let mut output = [0; 64];
+    let mut encoder = MessageBuilder::new(&mut output, Header::new(0, 0)).unwrap();
+    assert_eq!(
+        encoder
+            .add_opt(1232, 0, 0, 0, &[0, 1, 255, 255])
+            .unwrap_err()
+            .kind,
+        ErrorKind::InvalidOpt
+    );
+    assert_eq!(encoder.len(), 12);
 }

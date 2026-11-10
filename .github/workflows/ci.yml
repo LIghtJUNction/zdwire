@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit to validate before publishing
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Rust ${{ matrix.rust }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: ['1.74.0', stable]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install '${{ matrix.rust }}' --profile minimal
+      - name: Unit, integration, and documentation tests
+        env:
+          RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo test --locked --all-targets
+          cargo test --locked --doc
+          cargo doc --locked --no-deps
+
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - run: cargo +stable fmt --all --check
+      - run: cargo +stable clippy --locked --all-targets -- -D warnings
+      - run: python3 scripts/check-package.py
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
+  portable:
+    name: no_std / ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        target: [wasm32-unknown-unknown, thumbv7em-none-eabi]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --target '${{ matrix.target }}'
+      - run: cargo +stable check --locked --lib --target '${{ matrix.target }}'
+
+  comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable test --locked --manifest-path comparison/Cargo.toml
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable package --locked
+      - run: cargo +stable publish --locked --dry-run
+
+  miri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - run: rustup toolchain install nightly --profile minimal --component miri --component rust-src
+      - run: cargo +nightly miri setup
+      - name: Check adversarial names and malformed messages under Miri
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+        run: cargo +nightly miri test --locked --test security
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - run: rustup toolchain install nightly --profile minimal
+      - name: Mutate malformed and valid messages under AddressSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+        run: >-
+          cargo +nightly run --locked --release --manifest-path fuzz/Cargo.toml
+          --target x86_64-unknown-linux-gnu -- --iterations 200000 --seed 4277009102
