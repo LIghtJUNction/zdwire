@@ -1,0 +1,28 @@
+[package]
+name = "zdwire"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Zero-dependency, allocation-free DNS wire parsing and encoding"
+license = "MIT"
+repository = "https://github.com/LIghtJUNction/zdwire"
+readme = "README.md"
+keywords = ["dns", "no-std", "parser", "network", "zero-copy"]
+categories = ["network-programming", "no-std", "parser-implementations", "embedded"]
+include = ["src/**", "examples/**", "tests/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "CHANGELOG.md", "SECURITY.md"]
+
+[lib]
+path = "src/lib.rs"
+
+[workspace]
+members = ["."]
+exclude = ["comparison", "fuzz"]
+resolver = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1
