@@ -1,6 +1,9 @@
 name: Release
 
 on:
+  push:
+    branches: [main]
+    paths: [rust-toolchain.toml]
   workflow_dispatch:
     inputs:
       bump:
@@ -50,7 +53,7 @@ jobs:
       - name: Verify event and prepare version commit
         id: prepare
         env:
-          INPUT_BUMP: ${{ inputs.bump || 'current' }}
+          INPUT_BUMP: ${{ inputs.bump || 'patch' }}
         run: python3 scripts/release.py prepare
 
   verify:
