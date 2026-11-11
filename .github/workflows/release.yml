@@ -3,7 +3,8 @@ name: Release
 on:
   push:
     branches: [main]
-    paths: [rust-toolchain.toml]
+    # Publish only after an explicit release-request marker change.
+    paths: [.github/release-request.json]
   workflow_dispatch:
     inputs:
       bump:
