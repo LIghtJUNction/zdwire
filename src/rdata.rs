@@ -1,4 +1,4 @@
-use crate::{u16_at, u32_at, Error, ErrorKind, Name, Record, Section, Type};
+use crate::{Error, ErrorKind, Name, Record, Section, Type, u16_at, u32_at};
 use core::iter::FusedIterator;
 
 /// Typed, borrowed RDATA for the supported DNS wire formats.

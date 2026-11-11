@@ -3,10 +3,10 @@
 pub mod encode;
 pub mod fixtures;
 
+use domain::base::Message;
 use domain::base::name::{ParsedName, ToName};
 use domain::base::opt::UnknownOptData;
 use domain::base::rdata::{ComposeRecordData, UnknownRecordData};
-use domain::base::Message;
 use domain::rdata::AllRecordData;
 use zdwire::{MessageView, Name, Rdata};
 
@@ -209,7 +209,7 @@ fn dspecialized(
     digest: &mut Digest,
     record: domain::base::ParsedRecord<'_, [u8]>,
 ) -> Result<(), Rejected> {
-    use domain::rdata::{Aaaa, Caa, Cname, Mx, Ns, Ptr, Soa, Srv, Txt, A};
+    use domain::rdata::{A, Aaaa, Caa, Cname, Mx, Ns, Ptr, Soa, Srv, Txt};
     macro_rules! data {
         ($typ:ty) => {
             record

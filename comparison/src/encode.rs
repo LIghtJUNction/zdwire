@@ -5,11 +5,11 @@ use domain::base::message_builder::StaticCompressor;
 use domain::base::rdata::UnknownRecordData;
 use domain::base::wire::Composer;
 use domain::base::{MessageBuilder as DBuilder, Name as DName, Ttl};
-use domain::rdata::{Txt, A};
+use domain::rdata::{A, Txt};
 use octseq::builder::{OctetsBuilder, ShortBuf, Truncate};
 use zdwire::{Class, CompressionEntry, Header, MessageBuilder, Name, RecordData, Section, Type};
 
-use crate::fixtures::{txt_wire, WWW};
+use crate::fixtures::{WWW, txt_wire};
 
 pub struct EncodeCase {
     pub name: &'static str,

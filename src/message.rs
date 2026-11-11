@@ -1,4 +1,4 @@
-use crate::{take, u16_at, Error, ErrorKind, Name, Rdata, MAX_MESSAGE_LEN};
+use crate::{Error, ErrorKind, MAX_MESSAGE_LEN, Name, Rdata, take, u16_at};
 use core::iter::FusedIterator;
 
 /// DNS RR type. Unknown numeric values are preserved.

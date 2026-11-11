@@ -114,7 +114,9 @@ fn main() {
             fixture.name
         );
     }
-    eprintln!("domain=0.12.3 default-features=false; samples={samples}; target_ms={milliseconds}; all semantic checks passed");
+    eprintln!(
+        "domain=0.12.3 default-features=false; samples={samples}; target_ms={milliseconds}; all semantic checks passed"
+    );
     println!(
         "mode,case,bytes,zdwire_ns,domain_ns,domain_over_zdwire,zdwire_iqr_pct,domain_iqr_pct"
     );

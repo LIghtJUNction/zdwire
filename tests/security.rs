@@ -1,4 +1,4 @@
-use zdwire::{ErrorKind, MessageView, Name, MAX_POINTER_HOPS};
+use zdwire::{ErrorKind, MAX_POINTER_HOPS, MessageView, Name};
 
 #[test]
 fn pointers_reject_self_forward_cycles_and_out_of_bounds() {
@@ -39,9 +39,11 @@ fn every_truncated_query_is_rejected_by_full_validation() {
     let wire = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x07example\x03com\x00\x00\x01\x00\x01";
     assert!(MessageView::parse(wire).unwrap().validate().is_ok());
     for end in 0..wire.len() {
-        assert!(MessageView::parse(&wire[..end])
-            .and_then(|view| view.validate())
-            .is_err());
+        assert!(
+            MessageView::parse(&wire[..end])
+                .and_then(|view| view.validate())
+                .is_err()
+        );
     }
 }
 
@@ -150,9 +152,11 @@ fn malformed_encoding_is_transactional() {
             rdata: &[1, 2, 3, 4],
         },
     ] {
-        assert!(builder
-            .add_record(Section::Answer, name, Class::IN, 0, data)
-            .is_err());
+        assert!(
+            builder
+                .add_record(Section::Answer, name, Class::IN, 0, data)
+                .is_err()
+        );
         assert_eq!(builder.as_bytes(), before);
     }
     for options in [&[0u8, 1, 0xff, 0xff][..], &[0u8][..], &[0, 1, 0, 2, 0][..]] {

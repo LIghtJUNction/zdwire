@@ -23,7 +23,7 @@ pub use error::{Error, ErrorKind};
 pub use message::{
     Class, Header, MessageView, Question, Questions, Record, Records, Section, Type,
 };
-pub use name::{encode_name, Labels, Name, MAX_NAME_LEN, MAX_POINTER_HOPS};
+pub use name::{Labels, MAX_NAME_LEN, MAX_POINTER_HOPS, Name, encode_name};
 pub use rdata::{Opt, OptOption, OptOptions, Rdata, Txt, TxtIter};
 
 /// Maximum DNS message size, excluding a transport's length prefix.

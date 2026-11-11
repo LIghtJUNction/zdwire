@@ -1,6 +1,6 @@
 use zdwire::{
-    encode_name, Class, Error, ErrorKind, Header, MessageBuilder, MessageView, Name, OptOptions,
-    Rdata, RecordData, Section, Txt, Type,
+    Class, Error, ErrorKind, Header, MessageBuilder, MessageView, Name, OptOptions, Rdata,
+    RecordData, Section, Txt, Type, encode_name,
 };
 
 const EXAMPLE: &[u8] = b"\x07example\x03com\0";
