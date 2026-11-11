@@ -55,7 +55,7 @@ jobs:
       - name: Verify event and prepare version commit
         id: prepare
         env:
-          INPUT_BUMP: ${{ inputs.bump || 'patch' }}
+          INPUT_BUMP: ${{ inputs.bump || 'current' }}
         run: python3 scripts/release.py prepare
 
   verify:
