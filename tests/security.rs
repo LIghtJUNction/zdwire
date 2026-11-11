@@ -259,7 +259,7 @@ fn longest_contiguous_name_keeps_metadata_out_of_wire_length() {
     let mut packet = Vec::new();
     for length in [63, 63, 63, 61] {
         packet.push(length);
-        packet.extend(std::iter::repeat(b'x').take(length as usize));
+        packet.extend(std::iter::repeat_n(b'x', length as usize));
     }
     packet.push(0);
     assert_eq!(packet.len(), 255);
