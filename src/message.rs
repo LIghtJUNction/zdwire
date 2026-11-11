@@ -115,7 +115,7 @@ impl Header {
                 output.len(),
             ));
         }
-        for (out, word) in output[..Self::LEN].chunks_exact_mut(2).zip([
+        for (out, word) in output[..Self::LEN].as_chunks_mut::<2>().0.iter_mut().zip([
             self.id,
             self.flags,
             self.questions,
