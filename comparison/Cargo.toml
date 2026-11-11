@@ -1,11 +1,12 @@
 [package]
 name = "zdwire-comparison"
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.87"
+edition = "2024"
+rust-version = "1.99.1"
 publish = false
 
 [workspace]
+resolver = "3"
 
 [dependencies]
 zdwire = { path = ".." }

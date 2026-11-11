@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: ['1.74.0', stable]
+        rust: ['1.99.1', stable]
     defaults:
       run:
         shell: bash
