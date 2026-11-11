@@ -4,3 +4,5 @@ profile = "minimal"
 components = ["rustfmt", "clippy"]
 # Release automation validates this pinned stable toolchain.
 # Rust 2024 Edition migration release gate.
+
+# Publish verified Rust 2024 Edition crate.
